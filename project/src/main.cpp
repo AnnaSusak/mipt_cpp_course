@@ -1,58 +1,72 @@
-// Каркас агента: читает журнал событий построчно и считает строки.
-//
-// Это заготовка занятия 1.1, а не решение. Детектов она не ищет — их вы
-// добавите здесь же, в отмеченном месте ниже. Формат строки детекта, список
-// признаков и правило про их порядок заданы в постановке занятия: по ним
-// сравниваются эталоны.
-//
-// Весь код лежит в main, и на этом занятии так и надо: функции появятся
-// на занятии 1.2, ссылки — на 1.3. Разбор аргументов, коды возврата и флаг
-// --quiet — часть задания.
-//
-// Запуск:
-//   nano-edr <журнал.log>
 #include <cstdio>
-#include <fstream>
 #include <print>
 #include <string>
+#include <cstddef>
+#include <exception>
+#include "agent.h"
+#include "filesources.h"
+#include "os_source.h"
 
 int main(int argc, char** argv) {
-    // Аргументы разбираются грубо: путь к журналу и ничего больше. Остальное,
-    // включая --quiet, добавляется по заданию.
-    if (argc < 2) {
-        std::print(stderr, "использование: nano-edr <журнал.log>\n");
-        return 2;
-    }
+    try {
+        bool quiet = false;
+        std::size_t window_size = 64;
+        std::string path;
+        bool use_file = false;
 
-    std::ifstream log(argv[1]);
-    if (!log) {
-        std::print(stderr, "не удалось открыть журнал: {}\n", argv[1]);
-        return 2;
-    }
-
-    long long lines = 0;
-    long long comments = 0;
-    std::string line;
-
-    while (std::getline(log, line)) {
-        // Счётчик увеличивается до всех проверок: он считает строки файла,
-        // а не события. Номер, посчитанный по событиям, бесполезен — по нему
-        // нельзя открыть файл и посмотреть.
-        ++lines;
-
-        // Строки-комментарии в журнале начинаются с '#'. Они не события,
-        // и детекта по ним быть не должно.
-        if (!line.empty() && line[0] == '#') {
-            ++comments;
-            continue;
+        if (argc < 2) {
+            std::print(stderr, "использование: nano-edr <журнал.log>\n");
+            return 2;
         }
 
-        // >>> Здесь начинается занятие 1.1.
-        //
-        // Проверка признаков и печать детекта. Номер строки, который нужен
-        // в выводе, — это lines.
-    }
+        for (int i = 1; i < argc; i++) {
+            std::string cur = argv[i];
+            if (cur == "--quiet") {
+                quiet = true;
+            } else if (cur == "--window-size") {
+                if (i + 1 >= argc) {
+                    return 2;
+                }
+                std::string val = argv[++i];
+                try {
+                    std::size_t pos = 0;
+                    window_size = std::stoull(val, &pos);
+                    if (pos != val.length()) {
+                        return 2;
+                    }
+                } catch (...) {
+                    return 2;
+                }
+            } else if (cur == "--file") {
+                use_file = true;
+            } else if (!cur.empty() && cur[0] == '-') {
+                std::print(stderr, "неизвестная опция: {}\n", cur);
+                return 2;
+            } else if (path.empty()) {
+                path = cur;
+            } else {
+                std::print(stderr, "лишний аргумент: {}\n", cur);
+                return 2;
+            }
+        }
 
-    std::print("строк {}, из них комментариев {}\n", lines, comments);
-    return 0;
+        if (path.empty()) {
+            std::print(stderr, "не указан путь к журналу\n");
+            return 2;
+        }
+
+        nano_edr::Agent agent(window_size, quiet);
+        std::unique_ptr<nano_edr::IEventSource> source;
+        if (use_file) {
+            source = std::make_unique<nano_edr::FileSource>(path);
+        } else {
+            source = std::make_unique<nano_edr::OsSource>(path);
+        }
+        source->Run(&agent);
+        agent.PrintSummary();
+        return 0;
+    } catch (const std::exception& error) {
+        std::print(stderr, "ошибка: {}\n", error.what());
+        return 1;
+    }
 }
