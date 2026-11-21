@@ -151,7 +151,52 @@ std::unique_ptr<ThresholdRule<128>> CreateRansomwareMassWrite() {
     rule->AddAction("quarantine_file");
     return rule;
 }
-RuleEngine BuildAgentRules() {
+std::unique_ptr<SequenceRule> CreateShellSpawnsScriptHost(const EntityModel* model) {
+    auto rule = std::make_unique<SequenceRule>("shell_spawns_script_host",
+                                               Severity::kHigh, 30000);
+    auto shell_images = std::make_unique<AnyOf>();
+    shell_images->Add(std::make_unique<FieldEndsWith>("image", "cmd.exe"));
+    shell_images->Add(std::make_unique<FieldEndsWith>("image", "powershell.exe"));
+    shell_images->Add(std::make_unique<FieldEndsWith>("image", "pwsh.exe"));
+
+    auto shell = std::make_unique<AllOf>();
+    shell->Add(std::make_unique<EventTypeIs>(
+        std::vector<EventType>{EventType::kProcessStart}));
+    shell->Add(std::move(shell_images));
+    rule->SetFirst(std::move(shell));
+    auto script_images = std::make_unique<AnyOf>();
+    script_images->Add(std::make_unique<FieldEndsWith>("image", "wscript.exe"));
+    script_images->Add(std::make_unique<FieldEndsWith>("image", "cscript.exe"));
+
+    auto script = std::make_unique<AllOf>();
+    script->Add(std::make_unique<EventTypeIs>(
+        std::vector<EventType>{EventType::kProcessStart}));
+    script->Add(std::move(script_images));
+    rule->SetSecond(std::move(script));
+
+    rule->set_child_of_prev(true);
+    rule->SetModel(model);
+    rule->AddAction("kill_process");
+    return rule;
+}
+std::unique_ptr<LambdaRule> CreateSpawnedFromDroppedFile(const EntityModel* model) {
+    auto rule = MakeRule<LambdaRule>(
+        "spawned_from_dropped_file", Severity::kHigh,
+        [model](const Event& event) {
+            if (event.type() != "process_start") {
+                return false;
+            }
+            const FileRecord* source = model->FindSpawnSource(event.pid());
+            if (source == nullptr) {
+                return false;
+            }
+            return !source->writer_pid.empty() && source->writer_pid != event.pid();
+        });
+    rule->AddAction("kill_process");
+    rule->AddAction("quarantine_file");
+    return rule;
+}
+RuleEngine BuildAgentRules(const EntityModel* model) {
     RuleEngine engine;
     engine.AddRule(CreateScriptHostFromTemp());
     engine.AddRule(CreateLolbinDownload());
@@ -160,6 +205,8 @@ RuleEngine BuildAgentRules() {
     engine.AddRule(CreateRansomExtension());
     engine.AddRule(CreateBeacon());
     engine.AddRule(CreateRansomwareMassWrite());
+    engine.AddRule(CreateShellSpawnsScriptHost(model));
+    engine.AddRule(CreateSpawnedFromDroppedFile(model));
     return engine;
 }
 

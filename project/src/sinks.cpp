@@ -1,0 +1,60 @@
+#include <stdexcept>
+#include <string>
+#include <print>
+#include "alert_sink.h"
+#include "dedup_sink.h"
+#include "detection.h"
+
+namespace nano_edr {
+void ConsoleSink::operator()(const Detection& detection) const {
+    std::print("{}\n", ToString(detection));
+}
+
+FileSink::FileSink(const std::string& path) : out_(path) {
+    if (!out_.is_open()) {
+        throw std::runtime_error("не удалось открыть файл: " + path);
+    }
+}
+void FileSink::operator()(const Detection& detection) {
+    out_ << ToString(detection) << '\n';
+}
+void CountingSink::operator()(const Detection& detection) const {
+    ++counter_->total;
+    counter_->seen.push_back(detection);
+}
+void FanOutSink::Add(AlertSink sink) {
+    sinks_.push_back(std::move(sink));
+}
+void FanOutSink::operator()(const Detection& detection) const {
+    for(const auto& sink : sinks_){
+        sink(detection);
+    }
+}
+DedupSink::DedupSink(AlertSink inner, uint64_t period_ms, std::size_t* suppressed)
+    : inner_(std::move(inner)), period_ms_(period_ms), suppressed_(suppressed) {}
+void DedupSink::operator()(const Detection& detection) {
+    if (period_ms_ == 0) {
+        inner_(detection);
+        return;
+    }
+    for (std::size_t i = 0; i < rule_names_.size(); ++i) {
+        if (rule_names_[i] == detection.rule && pids_[i] == detection.pid) {
+            if (detection.ts.ms - first_ts_[i] <= period_ms_) {
+                if (suppressed_ != nullptr) {
+                    ++(*suppressed_);
+                }
+                return;
+            } else {
+                first_ts_[i] = detection.ts.ms;
+                inner_(detection);
+                return;
+            }
+        }
+    }
+    rule_names_.push_back(detection.rule);
+    pids_.push_back(detection.pid);
+    first_ts_.push_back(detection.ts.ms);
+    inner_(detection);
+}
+
+}
