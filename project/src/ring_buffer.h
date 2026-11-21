@@ -1,75 +1,76 @@
-// Заготовка кольцевого буфера. Занятие 3.1.
-//
-// Скопируйте файл в `src/` и доведите до рабочего состояния. С этого момента
-// он ваш: правьте что угодно, включая этот комментарий.
-//
-// ЧТО ЗДЕСЬ ЛЕЖИТ
-//
-// Публичный интерфейс целиком и ни одного тела. Интерфейс менять нельзя —
-// против него собраны выданные тесты и выданный `ThresholdRule`. Всё
-// остальное ваше: приватные поля, как считается физический индекс, как
-// устроен итератор.
-//
-// ЗАДАНИЕ
-//
-// 1. Сделать буфер шаблоном `RingBuffer<T, N>`. Сейчас он хранит `Timestamp`,
-//    а вместимость задана константой — так его хватило бы одному
-//    `ThresholdRule` и никому больше: окно агента хранит не отметки времени.
-//    `T` — параметр-тип, `N` — non-type параметр (лекция 8): размер попадает
-//    в тип, поэтому `RingBuffer<int, 4>` и `RingBuffer<int, 64>` — разные
-//    типы, и перепутать их нельзя.
-// 2. Написать реализацию. Тела пишутся прямо здесь: шаблон нельзя разложить
-//    на заголовок и `.cpp` — компилятору нужно тело в той единице трансляции,
-//    где шаблон используется.
-//
-// Требования к поведению и границы, которые проверяются, — в постановке
-// занятия.
-
 #ifndef NANO_EDR_RING_BUFFER_H
 #define NANO_EDR_RING_BUFFER_H
-
 #include <cstddef>
-
-#include "event.h"
-
 namespace nano_edr {
+template <typename T, std::size_t N>
+class RingBuffer;
+template <typename T, std::size_t N>
+class RingBufferIterator {
+ public:
+    const T& operator*() const {
+        return (*buffer_)[index_];
+    }
 
+    RingBufferIterator& operator++() {
+        ++index_;
+        return *this;
+    }
+
+    bool operator!=(const RingBufferIterator& other) const {
+        return buffer_ != other.buffer_ || index_ != other.index_;
+    }
+
+ private:
+    const RingBuffer<T, N>* buffer_ = nullptr;
+    std::size_t index_ = 0;
+    friend class RingBuffer<T, N>;
+    RingBufferIterator(const RingBuffer<T, N>* buffer, std::size_t index)
+        : buffer_(buffer), index_(index) {}
+};
+template <typename T, std::size_t N>
 class RingBuffer {
  public:
-    // Обход в логическом порядке — от самого старого к самому новому.
-    //
-    // Итератор минимальный: ровно то, что нужно range-based for. Как он
-    // добирается до элементов буфера, решаете вы; приватной части здесь нет
-    // намеренно.
-    class Iterator {
-     public:
-        const Timestamp& operator*() const;
-        Iterator& operator++();
-        bool operator!=(const Iterator& other) const;
-    };
-
-    // Дописывает элемент. Если буфер полон, самый старый затирается — окно,
-    // а не архив.
-    void PushBack(const Timestamp& value);
-
-    void Clear();
-
-    std::size_t size() const;
-    static constexpr std::size_t capacity();
-    bool empty() const;
-    bool full() const;
-
-    // По логическому индексу: 0 — самый старый.
-    const Timestamp& operator[](std::size_t index) const;
-
-    // Самый новый элемент. Вызывать на пустом буфере нельзя — это ошибка
-    // в коде вызывающего, а не случай, который надо обрабатывать.
-    const Timestamp& back() const;
-
-    Iterator begin() const;
-    Iterator end() const;
+    using Iterator = RingBufferIterator<T, N>;
+    void PushBack(const T& value) {
+        data_[cur_pos] = value;
+        cur_pos = (cur_pos + 1) % N;
+        if (size_ < N) {
+            size_++;
+        }
+    }
+    void Clear() {
+        size_ = 0;
+        cur_pos = 0;
+    }
+    std::size_t size() const {
+        return size_;
+    }
+    static constexpr std::size_t capacity() {
+        return N;
+    }
+    bool empty() const {
+        return size_ == 0;
+    }
+    bool full() const {
+        return size_ == N;
+    }
+    const T& operator[](std::size_t index) const {
+        std::size_t start = (cur_pos + N - size_) % N;
+        return data_[(start + index) % N];
+    }
+    const T& back() const {
+        return (*this)[size_ - 1];
+    }
+    Iterator begin() const {
+        return Iterator(this, 0);
+    }
+    Iterator end() const {
+        return Iterator(this, size_);
+    }
+ private:
+    T data_[N]{};
+    std::size_t size_ = 0;
+    std::size_t cur_pos = 0;
 };
-
-}  // namespace nano_edr
-
-#endif  // NANO_EDR_RING_BUFFER_H
+}
+#endif
